@@ -32,9 +32,9 @@ if __name__ == "__main__":
         for n_repeat in range(opt_repeat):
             qa_folder = f"{save_folder}/{name}/{n_repeat + opt_start}"
             # Create save folder
-            if os.path.exists(qa_folder) and len(os.listdir(qa_folder)) > 0:
-                print(f"Skipping {name} because sample exists and folder is non-empty.")
-                continue
+            # if os.path.exists(qa_folder) and len(os.listdir(qa_folder)) > 0:
+            #     print(f"Skipping {name} because sample exists and folder is non-empty.")
+            #     continue
             os.makedirs(qa_folder, exist_ok="True")
             # Create edit and params
             edit = dig_pipeline.create_edit(pipe, vlm, vlm_processor, config, qa_pairs, prompt)

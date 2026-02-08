@@ -1,0 +1,7 @@
+question_postfix: "Answer with Yes or No."
+dataset:
+  - name: cake-baseball
+    prompt: "a photo of a cake below a baseball bat"
+    qa_pairs:
+      - question: "Is the cake below a baseball bat?"
+        answer: "Yes"

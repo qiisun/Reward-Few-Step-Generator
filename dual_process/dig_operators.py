@@ -19,11 +19,30 @@ def encode_images(pipe, image, generator_kwargs):
         width=generator_kwargs["width"]
     )
     image = image.to(device).to(dtype)
+    
+    # Standard VAE encode
     scale_factor = pipe.vae.config.get("scaling_factor", 1) or 1
     shift_factor = pipe.vae.config.get("shift_factor", 0) or 0
     latents = pipe.vae.encode(image).latent_dist.sample()
     latents = (latents - shift_factor) * scale_factor
-    if hasattr(pipe, "_pack_latents"):
+    
+    # Flux2Klein specific processing
+    pipe_cls = dig_helpers.get_pipe_cls(pipe)
+    if pipe_cls == "flux2" or hasattr(pipe, '_patchify_latents'):
+        # Patchify latents
+        if hasattr(pipe, '_patchify_latents'):
+            latents = pipe._patchify_latents(latents)
+        
+        # Apply batch norm normalization (standardization)
+        if hasattr(pipe.vae, 'bn'):
+            latents_bn_mean = pipe.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
+            latents_bn_std = torch.sqrt(pipe.vae.bn.running_var.view(1, -1, 1, 1) + pipe.vae.config.batch_norm_eps).to(
+                latents.device, latents.dtype
+            )
+            latents = (latents - latents_bn_mean) / latents_bn_std
+    
+    # Standard packing for other pipelines
+    elif hasattr(pipe, "_pack_latents"):
         backbone = dig_helpers.get_backbone(pipe)
         num_channels_latents = backbone.config.in_channels // 4
         latents = pipe._pack_latents(
@@ -33,25 +52,49 @@ def encode_images(pipe, image, generator_kwargs):
             height=latents.shape[-2],
             width=latents.shape[-1]
         )
+    
     return latents
 
-def decode_images(pipe, latents, generator_kwargs):
-    if hasattr(pipe, "_unpack_latents"):
+def decode_images(pipe, latents, generator_kwargs, latent_ids=None):
+    pipe_cls = dig_helpers.get_pipe_cls(pipe)
+    
+    # Flux2Klein specific decoding
+    if pipe_cls == "flux2" or hasattr(pipe, '_unpack_latents_with_ids'):
+        # Unpack latents with ids (convert from packed format back to spatial format)
+        if latent_ids is not None:
+            latents = pipe._unpack_latents_with_ids(latents, latent_ids)
+        
+        # Apply batch norm denormalization
+        if hasattr(pipe.vae, 'bn'):
+            latents_bn_mean = pipe.vae.bn.running_mean.view(1, -1, 1, 1).to(latents.device, latents.dtype)
+            latents_bn_std = torch.sqrt(pipe.vae.bn.running_var.view(1, -1, 1, 1) + pipe.vae.config.batch_norm_eps).to(
+                latents.device, latents.dtype
+            )
+            latents = latents * latents_bn_std + latents_bn_mean
+        
+        # Unpatchify latents (convert from patched format back to standard format)
+        if hasattr(pipe, '_unpatchify_latents'):
+            latents = pipe._unpatchify_latents(latents)
+    
+    # Standard unpacking for other pipelines
+    elif hasattr(pipe, "_unpack_latents"):
         latents = pipe._unpack_latents(
             latents=latents, 
             vae_scale_factor=pipe.vae_scale_factor, 
             height=generator_kwargs["height"],
             width=generator_kwargs["width"]
         )
+    
+    # Apply scaling and shift factors
     scale_factor = pipe.vae.config.get("scaling_factor", 1) or 1
     shift_factor = pipe.vae.config.get("shift_factor", 0) or 0
     latents = (latents / scale_factor) + shift_factor
     latents = latents.to(pipe.vae.device)
     latents = latents.to(pipe.vae.dtype)
-    image = pipe.vae.decode(latents).sample
+    image = pipe.vae.decode(latents, return_dict=False)[0]
     return image
 
-def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs):
+def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs, forward_kwargs=None):
     train_scheduler = dig_helpers.get_train_scheduler(pipe)
     scheduler_cls = train_scheduler._class_name
     if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
@@ -63,7 +106,13 @@ def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs):
         pred_x0 = outputs.pred_original_sample
     else:
         raise NotImplementedError
-    pred_x0 = decode_images(pipe, pred_x0, generator_kwargs)
+    
+    # Extract latent_ids from forward_kwargs if available (needed for Flux2Klein)
+    latent_ids = None
+    if forward_kwargs is not None:
+        latent_ids = forward_kwargs.get("latent_ids", None)
+    
+    pred_x0 = decode_images(pipe, pred_x0, generator_kwargs, latent_ids=latent_ids)
     return pred_x0
 
 # =====================================
@@ -253,12 +302,35 @@ def loss_logits(logits, labels):
     loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=IGNORE_INDEX)
     return loss
 
+def loss_sym(pipe, edit, generator_kwargs=None, forward_kwargs=None, model_pred=None, i=0, t=0, o=0, pred_x0=None, guidance_idx=None):
+    if pred_x0 is None:
+        pred_x0 = get_x0(pipe, forward_kwargs["hidden_states"], model_pred, i, t, generator_kwargs, forward_kwargs=forward_kwargs)
+    if pred_x0.ndim == 3:
+            pred_x0 = pred_x0[None, ...]
+    if pipe is not None:
+        pred_x0 = pred_x0.to(pipe.device)
+        pred_x0 = pred_x0.to(pipe.dtype)
+
+    _, _, _, w = pred_x0.shape
+    half_w = w // 2
+    left = pred_x0[..., :half_w]
+    right = pred_x0[..., -half_w:]
+    right_flip = torch.flip(right, dims=[-1])
+
+    sym_mode = edit.get("sym_mode", "l1")
+    if sym_mode == "l2":
+        per_sample = (left - right_flip).pow(2).mean(dim=(-3, -2, -1))
+    else:
+        per_sample = (left - right_flip).abs().mean(dim=(-3, -2, -1))
+    loss = per_sample.mean()
+    return loss, {"sym_error": per_sample.detach()}
+
 def loss_vlm(pipe, edit, generator_kwargs=None, forward_kwargs=None, model_pred=None, i=0, t=0, o=0, pred_x0=None, guidance_idx=None):
     vlm, vlm_processor = edit["vlm"], edit["vlm_processor"]
     device, dtype = vlm.device, vlm.dtype
     # Prepare and run forward
     if pred_x0 is None:
-        pred_x0 = get_x0(pipe, forward_kwargs["hidden_states"], model_pred, i, t, generator_kwargs)
+        pred_x0 = get_x0(pipe, forward_kwargs["hidden_states"], model_pred, i, t, generator_kwargs, forward_kwargs=forward_kwargs)
     input_ids, pixel_values, vlm_kwargs, optimize_mask = get_vlm_args(pipe, edit, pred_x0, guidance_idx=guidance_idx)
     input_ids = input_ids.to(device)
     pixel_values = pixel_values.to(device, dtype)

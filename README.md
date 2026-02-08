@@ -1,3 +1,12 @@
+Train
+
+```bash
+bash run.sh
+```
+
+
+---------
+
 # 🐢 Dual-Process Image Generation
 **Grace Luo, Jonathan Granskog, Aleksander Holynski, Trevor Darrell**
 

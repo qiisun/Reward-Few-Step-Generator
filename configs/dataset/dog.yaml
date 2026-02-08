@@ -1,0 +1,7 @@
+question_postfix: "Answer with Yes or No."
+dataset:
+  - name: dog-tree
+    prompt: "A gigantic dog and a tree next to it, photorealistic"
+    qa_pairs:
+      - question: "Is the dog taller than the tree next to it?"
+        answer: "Yes"

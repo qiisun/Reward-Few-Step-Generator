@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug: dig",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/script_dual_process.py",
+            "python": "/home/sunqi/miniconda3/envs/dig/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false, 
+            "args": [
+                // 参数1: 逗号分隔的配置文件路径 (注意这里是一个长字符串)
+                "configs/base.yaml,configs/pipe/klein.yaml,configs/vlm/idefics2.yaml,configs/dataset/demo.yaml",
+                
+                // 参数2: 保存路径
+                "save_folder=runs/demo_klein_idefics2"
+            ],
+            // 环境变量配置 (顺便把我们刚才讨论的优化加上)
+            "env": {
+                "NCCL_P2P_DISABLE": "1",  // 解决 6000 Ada 跨卡通信问题的保底方案
+                "CUDA_VISIBLE_DEVICES": "0,1" // 如果你想限定只用前两张卡调试
+            }
+        }
+    ]
+}

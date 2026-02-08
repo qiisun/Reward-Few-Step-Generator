@@ -1,0 +1,7 @@
+question_postfix: "Answer with Yes or No."
+dataset:
+  - name: pan-discoloration
+    prompt: "An empty pan heated for a long time"
+    qa_pairs:
+      - question: "Is there any visible discoloration or damage on the pan?"
+        answer: "Yes"

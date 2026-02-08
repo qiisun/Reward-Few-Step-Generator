@@ -1,0 +1,7 @@
+question_postfix: "Answer with Yes or No."
+dataset:
+  - name: bookshelf-empty
+    prompt: "A bookshelf just assembled"
+    qa_pairs:
+      - question: "Is the bookshelf empty?"
+        answer: "Yes"

@@ -48,7 +48,7 @@ def create_vlm_edit(edit, vlm, vlm_processor, config, qa_pairs):
     edit["vlm"] = vlm
     edit["vlm_processor"] = vlm_processor
     edit["guidance_prompts"] = guidance_prompts
-    edit["loss_fn"] = "loss_vlm_multiqa"
+    edit["loss_fn"] = config["eval_kwargs"]["loss_fn"]
     return edit
 
 @torch.no_grad()
@@ -81,10 +81,13 @@ def run_vlm(pipe, edit, pred_x0, max_new_tokens=10):
     answer = vlm_processor.batch_decode(outputs[:, input_ids.shape[1]:], skip_special_tokens=True)[0]
     return answer
 
-def run_eval(pipe, generator_kwargs, prompt, eval_weights, eval_n, eval_seed, eval_noise=None, low_memory=False):
+def run_eval(pipe, generator_kwargs, prompt, eval_weights, eval_n, eval_seed, eval_noise=None, low_memory=False, loss_fn=None):
     eval_images = []
+    generator = torch.Generator().manual_seed(eval_seed)
+    if eval_noise == None:
+        eval_noise = torch.randn((eval_n, 128, 32, 32), generator=generator)
+        eval_noise = eval_noise.to(pipe.dtype)
     for weight in eval_weights:
-        generator = torch.Generator().manual_seed(eval_seed)
         eval_kwargs = {
             "pipe": pipe,
             "prompt": prompt,
@@ -96,7 +99,7 @@ def run_eval(pipe, generator_kwargs, prompt, eval_weights, eval_n, eval_seed, ev
                 images = []
                 for i in range(eval_n):
                     latents = eval_noise[i][None, ...] if eval_noise is not None else None
-                    image = dig_helpers.run_pipe(num_images_per_prompt=1, latents=latents, **eval_kwargs)[0]
+                    image = dig_helpers.run_pipe(num_images_per_prompt=1, latents=latents, **eval_kwargs)[0] # this line
                     images.append(image)
             else:
                 images = dig_helpers.run_pipe(num_images_per_prompt=eval_n, latents=eval_noise, **eval_kwargs)
@@ -195,7 +198,7 @@ def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise
     #      Synthetic Data
     # ===========================
     pipe_cls = dig_helpers.get_pipe_cls(pipe)
-    with dig_helpers.LoraManager(pipe, enter_weights=train_weight):
+    with dig_helpers.LoraManager(pipe, enter_weights=train_weight): # [5]
         with torch.no_grad():
             if edit.get("subsample", True):
                 # Generate and early stop

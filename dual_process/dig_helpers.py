@@ -71,6 +71,8 @@ def load_config(config_names):
 # ===========================
 def get_pipe_cls(pipe):
     class_name = str(type(pipe))
+    if "Flux2" in class_name:
+        return "flux2"
     if "Flux" in class_name:
         return "flux"
     elif "StableDiffusion" in class_name:
@@ -130,6 +132,25 @@ def load_weights(pipe, output_file):
 # ===========================
 #  General Pipeline Helpers
 # ===========================
+# copy from FLux Klein repo
+def compute_empirical_mu(image_seq_len: int, num_steps: int) -> float:
+    a1, b1 = 8.73809524e-05, 1.89833333
+    a2, b2 = 0.00016927, 0.45666666
+
+    if image_seq_len > 4300:
+        mu = a2 * image_seq_len + b2
+        return float(mu)
+
+    m_200 = a2 * image_seq_len + b2
+    m_10 = a1 * image_seq_len + b1
+
+    a = (m_200 - m_10) / 190.0
+    b = m_200 - 200.0 * a
+    mu = a * num_steps + b
+
+    return float(mu)
+
+
 def renormalize(x, range_a, range_b):
     min_a, max_a = range_a
     min_b, max_b = range_b
@@ -174,9 +195,17 @@ def run_pipe(pipe, generator_kwargs, prompt_kwargs={}, stop_i=None, **kwargs):
         callback_interrupt = create_callback_interrupt(stop_i)
         pipe_kwargs["callback_on_step_end"] = callback_interrupt
     if stop_i is None or stop_i > 0:
-        return pipe(**pipe_kwargs).images
+        if pipe_kwargs["latents"] is not None:
+            pipe_kwargs["latents"] = pipe_kwargs.get("latents").reshape(1, 128, 32, 32)
+            output = pipe(**pipe_kwargs).images
+            if isinstance(output, list):
+                return output
+            else:
+                return output.permute(0,2,3,1).reshape(1, 1024, 128)
+        else:
+            return pipe(**pipe_kwargs).images
     else:
-        return pipe_kwargs.get("latents")
+        return pipe_kwargs.get("latents").reshape(1, 1024, 128)
 
 def get_train_scheduler(pipe):
     scheduler_cls = pipe.scheduler_config["train_scheduler_cls"]
@@ -196,7 +225,9 @@ def get_train_scheduler(pipe):
     num_timesteps = pipe.scheduler_config["num_train_timesteps"]
     if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
         sigmas = np.linspace(1.0, 1 / num_timesteps, num_timesteps)
-        scheduler.set_timesteps(sigmas=sigmas)
+        image_seq_len = 1024 # latents.shape[1] (512/16)**2
+        mu = compute_empirical_mu(image_seq_len=image_seq_len, num_steps=num_timesteps)
+        scheduler.set_timesteps(sigmas=sigmas, mu=mu)
     else:
         scheduler.set_timesteps(num_timesteps)
     return scheduler
@@ -254,7 +285,7 @@ def get_flux_latent_image_ids(pipe, generator_kwargs, batch_size=1):
         device,
         dtype,
     )
-    return latent_image_ids
+    return latent_image_ids.to(device)
 
 def get_flux_guidance(pipe, generator_kwargs):
     if pipe.transformer.config.guidance_embeds:
@@ -347,3 +378,75 @@ def encode_sana_text(pipe, prompts, keys, device):
 
 def run_sana_forward(pipe, generator_kwargs, latents, t, forward_kwargs):
     return run_sd_forward(pipe, generator_kwargs, latents, t, forward_kwargs, sample_key="hidden_states")
+
+
+# ===========================
+#   Flux2Klein Pipeline Helpers
+# ===========================
+def get_flux2_latent_shape(pipe, generator_kwargs, batch_size=1, pack=False):
+    """Get latent shape for Flux2Klein pipeline"""
+    backbone = get_backbone(pipe)
+    num_channels_latents = backbone.config.in_channels // 4
+    height, width = generator_kwargs["height"], generator_kwargs["width"]
+    height = 2 * (int(height) // (pipe.vae_scale_factor * 2))
+    width = 2 * (int(width) // (pipe.vae_scale_factor * 2))
+    if not pack:
+        shape = (batch_size, num_channels_latents, height, width)
+    else:
+        # Flux2 uses packed latents: (batch_size, height * width, num_channels)
+        shape = (batch_size, (height // 2) * (width // 2), num_channels_latents * 4)
+    return shape
+
+def encode_flux2_text(pipe, prompts, keys, device):
+    """Encode text for Flux2Klein pipeline (no prompt_2 parameter)"""
+    prompt_kwargs = {}
+    for key, prompt in zip(keys, prompts):
+        prompt_embeds, text_ids = pipe.encode_prompt(
+            prompt=prompt,
+            device=device
+        )
+        prompt_kwargs[f"{key}_prompt_kwargs"] = {
+            "encoder_hidden_states": prompt_embeds,
+            "txt_ids": text_ids,
+        }
+    return prompt_kwargs
+
+def get_flux2_latent_image_ids(pipe, generator_kwargs, batch_size=1):
+    """Get latent image ids for Flux2Klein pipeline"""
+    device, dtype = pipe.device, pipe.dtype
+    b, c, h, w = get_flux2_latent_shape(pipe, generator_kwargs, batch_size, pack=False)
+    # Use pipeline's static method to prepare latent ids
+    latent_image_ids = pipe._prepare_latent_ids(
+        torch.zeros(b, c, h // 2, w // 2, device=device, dtype=dtype)
+    )
+    return latent_image_ids.to(device)
+
+def get_flux2_guidance(pipe, generator_kwargs):
+    """Get guidance for Flux2Klein pipeline (always None for Flux2Klein)"""
+    # Flux2Klein doesn't use guidance in the same way as original Flux
+    return None
+
+def run_flux2_forward(pipe, generator_kwargs, latents, t, forward_kwargs):
+    """Run forward pass for Flux2Klein pipeline"""
+    latent_image_ids = get_flux2_latent_image_ids(pipe, generator_kwargs)
+    guidance = get_flux2_guidance(pipe, generator_kwargs)
+    
+    # Prepare transformer forward kwargs
+    forward_kwargs = {
+        "hidden_states": latents, #[1,32, 64, 64]; it should be [1, 1024, 128]
+        "timestep": (t / 1000),
+        "guidance": guidance,
+        "img_ids": latent_image_ids, # [1, 1024, 4]
+        "return_dict": False,
+        **forward_kwargs
+    }
+    
+    # Remove latent_ids from transformer_kwargs if it exists (not needed for transformer)
+    forward_kwargs.pop("latent_ids", None)
+    
+    model_pred = pipe.transformer(**forward_kwargs)[0] # [1, 1024, 128] ???
+    
+    # Store latent_ids in forward_kwargs for decoder use
+    forward_kwargs["latent_ids"] = latent_image_ids
+    
+    return model_pred, forward_kwargs
