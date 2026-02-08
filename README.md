@@ -1,4 +1,14 @@
-Train
+
+- [x] Support Flux.2-Klein as generator
+
+## Installation
+This code was tested with Python 3.10. To install the necessary packages, please run:
+```
+conda env create -f environment.yaml
+conda activate dig
+```
+
+## Train
 
 ```bash
 bash run.sh
@@ -13,13 +23,6 @@ bash run.sh
 This repository contains the PyTorch implementation of Dual-Process Image Generation.
 
 [[`Project Page`](https://dual-process.github.io)][[`arXiv`](https://arxiv.org/abs/2506.01955)]
-
-## Setup
-This code was tested with Python 3.10. To install the necessary packages, please run:
-```
-conda env create -f environment.yaml
-conda activate dig
-```
 
 ## Gradio Demo
 You can also run our method as a gradio app using the following command.
