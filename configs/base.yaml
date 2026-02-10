@@ -10,6 +10,8 @@ opt_kwargs:
   train_n: ${opt_kwargs.num_opt_steps}
   train_seed: 100
   train_weight: 5
+  num_denoise_steps: 2
+  subsample: True
   optimizer_kwargs:
     weight_decay: 0
 eval_kwargs:

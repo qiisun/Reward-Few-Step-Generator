@@ -67,6 +67,7 @@ def create_edit(pipe, vlm, vlm_processor, config, qa_pairs, prompt):
         edit = OmegaConf.to_container(edit, resolve=True)
     edit = create_vlm_edit(edit, vlm, vlm_processor, config, qa_pairs)
     edit = create_pipe_edit(edit, pipe, prompt)
+    edit['subsample'] = config['opt_kwargs'].get("subsample", True)
     return edit
 
 # ===========================
@@ -193,7 +194,7 @@ class IterationChecker:
     def __init__(self):
         self.break_iter = False
 
-def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o):
+def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o,num_denoise_steps=1):
     # ===========================
     #      Synthetic Data
     # ===========================
@@ -239,15 +240,19 @@ def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise
     # ===========================
     #       Forward Pass
     # ===========================
-    with dig_helpers.LoraManager(pipe, enter_weights=train_weight):
-        forward_fn = getattr(dig_helpers, f"run_{pipe_cls}_forward")
-        model_pred, forward_kwargs = forward_fn(
-            pipe,
-            generator_kwargs, 
-            latents, 
-            t, 
-            edit["target_prompt_kwargs"]
-        )
+    if num_denoise_steps == 1:
+        with dig_helpers.LoraManager(pipe, enter_weights=train_weight):
+            forward_fn = getattr(dig_helpers, f"run_{pipe_cls}_forward")
+            model_pred, forward_kwargs = forward_fn(
+                pipe,
+                generator_kwargs, 
+                latents, 
+                t, 
+                edit["target_prompt_kwargs"]
+            )
+    else:
+        forward_kwargs = {'hidden_states': latents}
+        model_pred = None
     # ===========================
     #            Loss
     # ===========================
@@ -260,7 +265,8 @@ def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise
         model_pred=model_pred, 
         i=i, 
         t=t, 
-        o=o
+        o=o,
+        num_denoise_steps=num_denoise_steps
     )
     return loss
 
@@ -301,7 +307,7 @@ def optimize(pipe, edit, opt_kwargs, generator_kwargs, params, prompt=None, save
         # Select either ordered or random seed
         train_idx = np.random.choice(train_noise.shape[0]) if train_random else o % train_noise.shape[0]
         init_noise = train_noise[train_idx][None, ...]
-        loss = inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o)
+        loss = inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o, opt_kwargs["num_denoise_steps"])
         results["losses"].append(loss.item())
         # ===========================
         #      Optimizer Step

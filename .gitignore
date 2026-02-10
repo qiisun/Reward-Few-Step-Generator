@@ -5,3 +5,5 @@ interactive/
 unsloth_compiled_cache/
 weights/
 **images**
+*.png
+diffusers/

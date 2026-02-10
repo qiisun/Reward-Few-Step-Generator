@@ -198,10 +198,7 @@ def run_pipe(pipe, generator_kwargs, prompt_kwargs={}, stop_i=None, **kwargs):
         if pipe_kwargs["latents"] is not None:
             pipe_kwargs["latents"] = pipe_kwargs.get("latents").reshape(1, 128, 32, 32)
             output = pipe(**pipe_kwargs).images
-            if isinstance(output, list):
-                return output
-            else:
-                return output.permute(0,2,3,1).reshape(1, 1024, 128)
+            return output
         else:
             return pipe(**pipe_kwargs).images
     else:
@@ -421,21 +418,15 @@ def get_flux2_latent_image_ids(pipe, generator_kwargs, batch_size=1):
     )
     return latent_image_ids.to(device)
 
-def get_flux2_guidance(pipe, generator_kwargs):
-    """Get guidance for Flux2Klein pipeline (always None for Flux2Klein)"""
-    # Flux2Klein doesn't use guidance in the same way as original Flux
-    return None
-
 def run_flux2_forward(pipe, generator_kwargs, latents, t, forward_kwargs):
     """Run forward pass for Flux2Klein pipeline"""
     latent_image_ids = get_flux2_latent_image_ids(pipe, generator_kwargs)
-    guidance = get_flux2_guidance(pipe, generator_kwargs)
     
     # Prepare transformer forward kwargs
     forward_kwargs = {
         "hidden_states": latents, #[1,32, 64, 64]; it should be [1, 1024, 128]
         "timestep": (t / 1000),
-        "guidance": guidance,
+        "guidance": None,
         "img_ids": latent_image_ids, # [1, 1024, 4]
         "return_dict": False,
         **forward_kwargs
@@ -443,7 +434,6 @@ def run_flux2_forward(pipe, generator_kwargs, latents, t, forward_kwargs):
     
     # Remove latent_ids from transformer_kwargs if it exists (not needed for transformer)
     forward_kwargs.pop("latent_ids", None)
-    
     model_pred = pipe.transformer(**forward_kwargs)[0] # [1, 1024, 128] ???
     
     # Store latent_ids in forward_kwargs for decoder use

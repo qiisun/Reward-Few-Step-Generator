@@ -94,18 +94,59 @@ def decode_images(pipe, latents, generator_kwargs, latent_ids=None):
     image = pipe.vae.decode(latents, return_dict=False)[0]
     return image
 
-def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs, forward_kwargs=None):
+def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs, forward_kwargs=None, num_denoise_steps=1, train_weight=5.0, target_prompt_kwargs=None):
     train_scheduler = dig_helpers.get_train_scheduler(pipe)
     scheduler_cls = train_scheduler._class_name
-    if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
-        sigma = train_scheduler.sigmas[i]
-        pred_x0 = latents - sigma * noise_pred
-    elif scheduler_cls == "DDIMScheduler":
-        train_scheduler.alphas_cumprod = train_scheduler.alphas_cumprod.to(t.device)
-        outputs = train_scheduler.step(noise_pred, t, latents)
-        pred_x0 = outputs.pred_original_sample
+    
+    # Single-step prediction
+    if num_denoise_steps == 1:
+        if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
+            sigma = train_scheduler.sigmas[i]
+            pred_x0 = latents - sigma * noise_pred
+        elif scheduler_cls == "DDIMScheduler":
+            train_scheduler.alphas_cumprod = train_scheduler.alphas_cumprod.to(t.device)
+            outputs = train_scheduler.step(noise_pred, t, latents)
+            pred_x0 = outputs.pred_original_sample
+        else:
+            raise NotImplementedError
+    
+    # Multi-step denoising
     else:
-        raise NotImplementedError
+        # Get forward function for this pipeline class
+        pipe_cls = dig_helpers.get_pipe_cls(pipe)
+        forward_fn = getattr(dig_helpers, f"run_{pipe_cls}_forward")        
+        # Start from current latents
+        current_latents = latents
+        device = latents.device
+        
+        # Get all timesteps from current position to end
+        if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
+            sigmas = train_scheduler.sigmas
+        else:
+            raise NotImplementedError
+        # Multi-step denoise (with gradient and LoRA)
+        with dig_helpers.LoraManager(pipe, enter_weights=train_weight):
+            for step_idx in range(i, num_denoise_steps):
+                if scheduler_cls == "FlowMatchEulerDiscreteScheduler":
+                    sigma = sigmas[step_idx]
+                    sigma_next = sigmas[step_idx + 1]
+                    
+                    # Run forward function
+                    noise_output, forward_kwargs = forward_fn(
+                        pipe, 
+                        generator_kwargs, 
+                        current_latents,  # [1, 1024, 128]
+                        1000*torch.Tensor([sigma]).to(t.device),  # torch([1000.])
+                        target_prompt_kwargs # {} many things
+                    )
+                    
+                    # Euler step
+                    current_latents = current_latents + (sigma_next - sigma) * noise_output
+                    
+                # if i == 0:
+                #     break
+                        
+        pred_x0 = current_latents
     
     # Extract latent_ids from forward_kwargs if available (needed for Flux2Klein)
     latent_ids = None
@@ -113,6 +154,8 @@ def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs, forward_kwargs=Non
         latent_ids = forward_kwargs.get("latent_ids", None)
     
     pred_x0 = decode_images(pipe, pred_x0, generator_kwargs, latent_ids=latent_ids)
+    import torchvision.utils as vutils
+    vutils.save_image(pred_x0.cpu(), f'debug/pred_x0_decoded_{int(t.item())}.png', normalize=True)
     return pred_x0
 
 # =====================================
@@ -325,12 +368,15 @@ def loss_sym(pipe, edit, generator_kwargs=None, forward_kwargs=None, model_pred=
     loss = per_sample.mean()
     return loss, {"sym_error": per_sample.detach()}
 
-def loss_vlm(pipe, edit, generator_kwargs=None, forward_kwargs=None, model_pred=None, i=0, t=0, o=0, pred_x0=None, guidance_idx=None):
-    vlm, vlm_processor = edit["vlm"], edit["vlm_processor"]
+def loss_vlm(pipe, edit, generator_kwargs=None, forward_kwargs=None, model_pred=None, i=0, t=0, o=0, pred_x0=None, guidance_idx=None, num_denoise_steps=1):
+    vlm, vlm_processor, target_prompt_kwargs = edit["vlm"], edit["vlm_processor"], edit["target_prompt_kwargs"]
     device, dtype = vlm.device, vlm.dtype
     # Prepare and run forward
     if pred_x0 is None:
-        pred_x0 = get_x0(pipe, forward_kwargs["hidden_states"], model_pred, i, t, generator_kwargs, forward_kwargs=forward_kwargs)
+        pred_x0 = get_x0(pipe, forward_kwargs["hidden_states"], model_pred, i, t, generator_kwargs, forward_kwargs=forward_kwargs, num_denoise_steps=num_denoise_steps, target_prompt_kwargs=target_prompt_kwargs)
+    import torchvision.utils as vutils
+    if torch.is_tensor(pred_x0):
+        vutils.save_image(pred_x0.cpu(), f'debug/pred_x0_{int(t.item())}.png', normalize=True)
     input_ids, pixel_values, vlm_kwargs, optimize_mask = get_vlm_args(pipe, edit, pred_x0, guidance_idx=guidance_idx)
     input_ids = input_ids.to(device)
     pixel_values = pixel_values.to(device, dtype)

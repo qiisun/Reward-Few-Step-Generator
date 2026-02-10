@@ -7,7 +7,7 @@ dtype = torch.bfloat16
 pipe = Flux2KleinPipeline.from_pretrained("black-forest-labs/FLUX.2-klein-4B", torch_dtype=dtype)
 pipe.enable_model_cpu_offload()  # save some VRAM by offloading the model to CPU
 
-prompt = "A photo of a man"
+prompt = "a photo of a bus below a toothbrush"
 image = pipe(
     prompt=prompt,
     height=512,

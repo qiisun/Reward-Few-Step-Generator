@@ -6,6 +6,9 @@ This code was tested with Python 3.10. To install the necessary packages, please
 ```
 conda env create -f environment.yaml
 conda activate dig
+
+git clone git@github.com:qiisun/diffusers.git
+pip install -e diffusers
 ```
 
 ## Train

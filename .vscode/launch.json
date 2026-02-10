@@ -11,10 +11,10 @@
             "justMyCode": false, 
             "args": [
                 // 参数1: 逗号分隔的配置文件路径 (注意这里是一个长字符串)
-                "configs/base.yaml,configs/pipe/klein.yaml,configs/vlm/idefics2.yaml,configs/dataset/demo.yaml",
+                "configs/base.yaml,configs/pipe/klein.yaml,configs/vlm/idefics2.yaml,configs/dataset/demo1.yaml",
                 
                 // 参数2: 保存路径
-                "save_folder=runs/demo_klein_idefics2"
+                "save_folder=runs/klein_idefics2_2step"
             ],
             // 环境变量配置 (顺便把我们刚才讨论的优化加上)
             "env": {
