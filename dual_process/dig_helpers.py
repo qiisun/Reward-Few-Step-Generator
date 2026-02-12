@@ -229,7 +229,7 @@ def get_train_scheduler(pipe):
         scheduler.set_timesteps(num_timesteps)
     return scheduler
 
-def get_timestep(pipe):
+def get_timestep(pipe, is_full=False, denoising_from_t=1):
     train_scheduler = get_train_scheduler(pipe)
     timesteps = train_scheduler.timesteps.to(pipe.device)
     u = compute_density_for_timestep_sampling(
@@ -240,6 +240,9 @@ def get_timestep(pipe):
     t = timesteps[indices]
     i = indices
     i = i.long().item()
+    if is_full:
+        i = denoising_from_t
+        t = torch.tensor([timesteps[i]]).to(t.device).to(t.dtype)
     return i, t
 
 # ===========================

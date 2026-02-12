@@ -154,8 +154,8 @@ def get_x0(pipe, latents, noise_pred, i, t, generator_kwargs, forward_kwargs=Non
         latent_ids = forward_kwargs.get("latent_ids", None)
     
     pred_x0 = decode_images(pipe, pred_x0, generator_kwargs, latent_ids=latent_ids)
-    import torchvision.utils as vutils
-    vutils.save_image(pred_x0.cpu(), f'debug/pred_x0_decoded_{int(t.item())}.png', normalize=True)
+    # import torchvision.utils as vutils
+    # vutils.save_image(pred_x0.cpu(), f'debug/pred_x0_decoded_{int(t.item())}.png', normalize=True)
     return pred_x0
 
 # =====================================

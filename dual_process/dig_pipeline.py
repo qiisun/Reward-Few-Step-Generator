@@ -194,7 +194,7 @@ class IterationChecker:
     def __init__(self):
         self.break_iter = False
 
-def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o,num_denoise_steps=1):
+def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o,num_denoise_steps=1, is_full=False, denoising_from_t=0):
     # ===========================
     #      Synthetic Data
     # ===========================
@@ -205,7 +205,8 @@ def inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise
                 # Generate and early stop
                 # timestep is therefore subsampled
                 pipe.scheduler_config["num_train_timesteps"] = generator_kwargs["num_inference_steps"]
-                i, t = dig_helpers.get_timestep(pipe)
+                # if i == 0:
+                i, t = dig_helpers.get_timestep(pipe, is_full=is_full, denoising_from_t=denoising_from_t)
                 latents = dig_helpers.run_pipe(
                     pipe,
                     prompt_kwargs=edit["target_prompt_kwargs"],
@@ -307,7 +308,7 @@ def optimize(pipe, edit, opt_kwargs, generator_kwargs, params, prompt=None, save
         # Select either ordered or random seed
         train_idx = np.random.choice(train_noise.shape[0]) if train_random else o % train_noise.shape[0]
         init_noise = train_noise[train_idx][None, ...]
-        loss = inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o, opt_kwargs["num_denoise_steps"])
+        loss = inner_loop(pipe, edit, generator_kwargs, generator, train_weight, init_noise, o, opt_kwargs["num_denoise_steps"], opt_kwargs.get("is_full", False), opt_kwargs.get("denoising_from_t", 0))
         results["losses"].append(loss.item())
         # ===========================
         #      Optimizer Step

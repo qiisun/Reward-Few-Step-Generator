@@ -8,7 +8,7 @@ pipe_kwargs:
 generator_kwargs:
   height: 512
   width: 512
-  num_inference_steps: 2
+  num_inference_steps: 4
   guidance_scale: 1
 lora_kwargs:
   target_modules:
